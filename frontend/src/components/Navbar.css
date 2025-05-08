@@ -1,0 +1,22 @@
+.nav-link {
+    transition: color 0.3s ease;
+  }
+  
+  .nav-link:hover {
+    color: #2e7d32 !important;
+  }
+  
+  .active-nav {
+    color: #2e7d32 !important;
+    border-bottom: 2px solid #2e7d32;
+  }
+  
+  .navbar-nav .btn {
+    transition: all 0.3s ease-in-out;
+  }
+  
+  .navbar-nav .btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(34, 139, 50, 0.2);
+  }
+  
