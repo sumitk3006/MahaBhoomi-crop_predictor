@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import markerIconPng from 'leaflet/dist/images/marker-icon.png';
 import markerShadowPng from 'leaflet/dist/images/marker-shadow.png';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+// Recharts removed from PredictForm; market charts live on ResultPage
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { motion } from 'framer-motion';
@@ -18,9 +19,11 @@ const PredictForm = () => {
   const [formData, setFormData] = useState({ Rainfall: '', Area: '', District_Name: '', Season_Encoded: '', Soil_Quality_Encoded: '', Crop: '' });
   const [result, setResult] = useState(null);
   const [graphData, setGraphData] = useState([]);
-  const resultRef = useRef(null);
-
+  const [weatherData, setWeatherData] = useState(null);
+  const [loadingWeather, setLoadingWeather] = useState(false);
   const [mapInfo, setMapInfo] = useState({ center: [19.7515, 75.7139], zoom: 7, markers: [] });
+  const resultRef = useRef(null);
+  const navigate = useNavigate();
 
   const districtCoordinates = {
     Ahmednagar: [19.0948, 74.7477], Akola: [20.7096, 77.0085], Amravati: [20.9374, 77.7796],
@@ -41,6 +44,94 @@ const PredictForm = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
     if (name === 'District_Name' && districtCoordinates[value]) {
       setMapInfo({ center: districtCoordinates[value], zoom: 10, markers: [{ position: districtCoordinates[value], label: value }] });
+      // Fetch real-time weather data for the selected district
+      fetchWeatherData(value, districtCoordinates[value]);
+    }
+    // Market trends are rendered on the dashboard/result page
+  };
+
+  // Market trend fetching moved to ResultPage (dashboard)
+
+  const fetchWeatherData = async (district, coordinates) => {
+    setLoadingWeather(true);
+    try {
+      console.log(`Fetching weather for ${district} at ${coordinates}`);
+      
+      const response = await fetch('http://localhost:5000/api/weather', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          district: district,
+          latitude: coordinates[0],
+          longitude: coordinates[1]
+        })
+      });
+      
+      console.log('Weather API response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Weather data received:', data);
+        setWeatherData(data);
+        
+        // Auto-fill Rainfall field based on weather data
+        if (data.rain !== undefined) {
+          setFormData(prev => ({ ...prev, Rainfall: Math.round(data.rain * 100) || 50 }));
+        } else if (data.description && data.description.toLowerCase().includes('rain')) {
+          // If raining, auto-fill with estimated rainfall
+          setFormData(prev => ({ ...prev, Rainfall: 75 }));
+        } else if (data.humidity > 70) {
+          // If high humidity, assume moderate rainfall
+          setFormData(prev => ({ ...prev, Rainfall: 50 }));
+        } else {
+          // Default low rainfall
+          setFormData(prev => ({ ...prev, Rainfall: 25 }));
+        }
+        
+        // Auto-fill Season based on weather data
+        if (data.season) {
+          const seasonMap = {
+            'Rabi': 'Rabi',
+            'Kharif': 'Kharif',
+            'Whole Year': 'Whole Year'
+          };
+          const detectedSeason = Object.keys(seasonMap).find(s => 
+            data.season.toLowerCase().includes(s.toLowerCase()) || 
+            data.season.toLowerCase().includes(s.split(' ')[0].toLowerCase())
+          );
+          if (detectedSeason) {
+            setFormData(prev => ({ ...prev, Season_Encoded: detectedSeason }));
+          }
+        }
+      } else {
+        console.error('Weather API error:', response.status, response.statusText);
+        // Set fallback weather data
+        setWeatherData({
+          temperature: 28,
+          humidity: 65,
+          wind_speed: 12,
+          pressure: 1013,
+          description: 'Data unavailable',
+          season: 'Season detection',
+          status: 'fallback'
+        });
+        setFormData(prev => ({ ...prev, Rainfall: 50 }));
+      }
+    } catch (err) {
+      console.error('Error fetching weather:', err);
+      // Set fallback weather data
+      setWeatherData({
+        temperature: 28,
+        humidity: 65,
+        wind_speed: 12,
+        pressure: 1013,
+        description: 'Connection error',
+        season: 'Check backend',
+        status: 'error'
+      });
+      setFormData(prev => ({ ...prev, Rainfall: 50 }));
+    } finally {
+      setLoadingWeather(false);
     }
   };
 
@@ -53,17 +144,12 @@ const PredictForm = () => {
         body: JSON.stringify(formData)
       });
       const data = await response.json();
-      const area = parseFloat(formData.Area);
-      const production = parseFloat(data.predicted_production);
-      setResult(data.predicted_production);
-      setGraphData([
-        { name: 'Area (Ha)', value: area },
-        { name: 'Production (Qtls)', value: production },
-        { name: 'Yield (Qtls/Ha)', value: parseFloat((production / area).toFixed(2)) }
-      ]);
-      resultRef.current?.scrollIntoView({ behavior: 'smooth' });
+      
+      // Navigate to the new dashboard with all the detailed data
+      navigate('/result', { state: data });
     } catch (err) {
       console.error(err);
+      alert('Error making prediction. Please try again.');
     }
   };
 
@@ -118,65 +204,204 @@ const PredictForm = () => {
                 </div>
               ))}
               <button type="submit" className="btn btn-primary w-100 shadow-sm fw-semibold">
-                Predict
+                Predict & View Dashboard
               </button>
             </form>
+
+            {/* Real-time Weather Data Display */}
+            {weatherData && (
+              <motion.div className="mt-4 p-3 rounded-3 bg-success bg-opacity-10 border border-success border-opacity-25" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                <h6 className="text-success fw-bold mb-3">🌤️ Real-Time Weather Data</h6>
+                <div className="row g-2">
+                  <div className="col-6">
+                    <div className="small">
+                      <strong>Temperature:</strong>
+                      <span className="ms-2">{weatherData.temperature}°C</span>
+                    </div>
+                  </div>
+                  <div className="col-6">
+                    <div className="small">
+                      <strong>Humidity:</strong>
+                      <span className="ms-2">{weatherData.humidity}%</span>
+                    </div>
+                  </div>
+                  <div className="col-6">
+                    <div className="small">
+                      <strong>Wind Speed:</strong>
+                      <span className="ms-2">{weatherData.wind_speed} km/h</span>
+                    </div>
+                  </div>
+                  <div className="col-6">
+                    <div className="small">
+                      <strong>Pressure:</strong>
+                      <span className="ms-2">{weatherData.pressure} hPa</span>
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <div className="small">
+                      <strong>Condition:</strong>
+                      <span className="ms-2 text-capitalize">{weatherData.description}</span>
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <div className="small">
+                      <strong>Season:</strong>
+                      <span className="ms-2 badge bg-success">{weatherData.season}</span>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Market trends are shown on the Result/Dashboard page now */}
+
+            {loadingWeather && (
+              <div className="mt-3 text-center">
+                <div className="spinner-border spinner-border-sm text-success" role="status">
+                  <span className="visually-hidden">Loading weather...</span>
+                </div>
+                <small className="d-block mt-2 text-muted">Fetching real-time weather data...</small>
+              </div>
+            )}
           </motion.div>
         </div>
-
-        {/* Chart */}
-        {graphData.length > 0 && (
-          <div className="col-md-7">
-            <motion.div className="card shadow-lg border-0 rounded-4 bg-white p-4 mb-4" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }}>
-              <h4 className="text-center text-primary mb-4">Production Overview</h4>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={graphData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="value" fill="#0d6efd" />
-                </BarChart>
-              </ResponsiveContainer>
-            </motion.div>
-          </div>
-        )}
       </div>
 
-      {/* Map */}
+      {/* Weather Map with Temperature/Rainfall Visualization */}
       <motion.div className="mt-4" initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
-        <h5 className="text-center text-secondary mb-3">📍 District Map</h5>
-        <div className="rounded-4 overflow-hidden shadow-sm">
-          <MapContainer center={mapInfo.center} zoom={mapInfo.zoom} style={{ height: '400px', width: '100%' }}>
-            <ChangeMapCenter center={mapInfo.center} />
-            <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            {mapInfo.markers.map((marker, i) => (
-              <Marker key={i} position={marker.position} icon={L.icon({ iconUrl: markerIconPng, shadowUrl: markerShadowPng })}>
-                <Popup>{marker.label}<br />Lat: {marker.position[0].toFixed(4)}, Lon: {marker.position[1].toFixed(4)}</Popup>
-              </Marker>
-            ))}
-          </MapContainer>
+        <h5 className="text-center text-secondary mb-3">🗺️ Weather Map - {formData.District_Name || 'Select District'}</h5>
+        <div className="card shadow-lg border-0 rounded-4 p-3 mb-4">
+          {weatherData && (
+            <div>
+              {/* Weather Map with color overlay */}
+              <div className="rounded-3 overflow-hidden position-relative" style={{ height: '450px' }}>
+                <MapContainer center={mapInfo.center} zoom={mapInfo.zoom} style={{ height: '100%', width: '100%' }}>
+                  <ChangeMapCenter center={mapInfo.center} />
+                  <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  
+                  {/* Temperature Heatmap Overlay - Circle representing temperature zone */}
+                  {mapInfo.markers.map((marker, i) => {
+                    const tempColor = weatherData.temperature < 20 ? '#3498db' : 
+                                     weatherData.temperature < 25 ? '#2ecc71' : 
+                                     weatherData.temperature < 30 ? '#f39c12' : '#e74c3c';
+                    
+                    return (
+                      <Marker key={i} position={marker.position} icon={L.icon({ iconUrl: markerIconPng, shadowUrl: markerShadowPng })}>
+                        <Popup>
+                          <div style={{ minWidth: '200px' }}>
+                            <h6 className="mb-2">{marker.label}</h6>
+                            <hr className="my-2" />
+                            <p className="mb-1"><strong>🌡️ Temperature:</strong> {weatherData.temperature}°C</p>
+                            <p className="mb-1"><strong>💧 Humidity:</strong> {weatherData.humidity}%</p>
+                            <p className="mb-1"><strong>💨 Wind:</strong> {weatherData.wind_speed} km/h</p>
+                            <p className="mb-1"><strong>📊 Pressure:</strong> {weatherData.pressure} hPa</p>
+                            <p className="mb-0"><strong>☁️ Condition:</strong> {weatherData.description}</p>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    );
+                  })}
+                </MapContainer>
+
+                {/* Weather Legend Overlay */}
+                <div className="position-absolute" style={{ bottom: '15px', left: '15px', zIndex: 1000, backgroundColor: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
+                  <h6 className="mb-2 fw-bold">🌡️ Temperature Zones</h6>
+                  <div className="d-flex flex-column gap-1" style={{ fontSize: '0.85rem' }}>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#3498db', borderRadius: '3px' }}></div>
+                      <span>Cold (&lt; 20°C)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#2ecc71', borderRadius: '3px' }}></div>
+                      <span>Cool (20-25°C)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#f39c12', borderRadius: '3px' }}></div>
+                      <span>Warm (25-30°C)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#e74c3c', borderRadius: '3px' }}></div>
+                      <span>Hot (&gt; 30°C)</span>
+                    </div>
+                  </div>
+
+                  <hr className="my-2" />
+
+                  <h6 className="mb-2 fw-bold">💧 Humidity Zones</h6>
+                  <div className="d-flex flex-column gap-1" style={{ fontSize: '0.85rem' }}>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#e74c3c', borderRadius: '3px' }}></div>
+                      <span>Dry (&lt; 40%)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#f39c12', borderRadius: '3px' }}></div>
+                      <span>Moderate (40-60%)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#3498db', borderRadius: '3px' }}></div>
+                      <span>High (60-80%)</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <div style={{ width: '20px', height: '20px', backgroundColor: '#16a085', borderRadius: '3px' }}></div>
+                      <span>Very High (&gt; 80%)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Current Weather Info Box */}
+                <div className="position-absolute" style={{ top: '15px', right: '15px', zIndex: 1000, backgroundColor: 'rgba(255,255,255,0.95)', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 10px rgba(0,0,0,0.2)', minWidth: '220px' }}>
+                  <div className="text-center mb-2">
+                    <h6 className="mb-1 fw-bold">{formData.District_Name || 'District'}</h6>
+                    <small className="text-muted">Real-time Weather Data</small>
+                  </div>
+                  <hr className="my-2" />
+                  <div style={{ fontSize: '0.9rem' }}>
+                    <p className="mb-2"><span style={{ fontSize: '2rem' }}>
+                      {weatherData.temperature < 20 ? '❄️' : 
+                       weatherData.temperature < 25 ? '🌤️' : 
+                       weatherData.temperature < 30 ? '☀️' : '🔥'}
+                    </span></p>
+                    <p className="mb-1"><strong>{weatherData.temperature}°C</strong></p>
+                    <p className="mb-1 text-capitalize" style={{ fontSize: '0.85rem' }}>{weatherData.description}</p>
+                    <hr className="my-2" />
+                    <p className="mb-1"><small>💧 {weatherData.humidity}% Humidity</small></p>
+                    <p className="mb-1"><small>💨 {weatherData.wind_speed} km/h Wind</small></p>
+                    <p className="mb-0"><small>📊 {weatherData.pressure} hPa</small></p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Weather Summary Stats */}
+              <div className="row g-2 mt-3">
+                <div className="col-md-3">
+                  <div className="p-2 rounded-2 text-center" style={{ backgroundColor: `${weatherData.temperature < 20 ? '#e3f2fd' : weatherData.temperature < 25 ? '#e8f5e9' : weatherData.temperature < 30 ? '#fff3e0' : '#ffebee'}` }}>
+                    <small className="d-block text-muted">Temperature Trend</small>
+                    <strong style={{ fontSize: '1.2rem' }}>{weatherData.temperature}°C</strong>
+                  </div>
+                </div>
+                <div className="col-md-3">
+                  <div className="p-2 rounded-2 text-center" style={{ backgroundColor: `${weatherData.humidity < 40 ? '#ffebee' : weatherData.humidity < 60 ? '#fff3e0' : weatherData.humidity < 80 ? '#e3f2fd' : '#e0f2f1'}` }}>
+                    <small className="d-block text-muted">Humidity Level</small>
+                    <strong style={{ fontSize: '1.2rem' }}>{weatherData.humidity}%</strong>
+                  </div>
+                </div>
+                <div className="col-md-3">
+                  <div className="p-2 rounded-2 text-center bg-info bg-opacity-10">
+                    <small className="d-block text-muted">Wind Speed</small>
+                    <strong style={{ fontSize: '1.2rem' }}>{weatherData.wind_speed} km/h</strong>
+                  </div>
+                </div>
+                <div className="col-md-3">
+                  <div className="p-2 rounded-2 text-center bg-warning bg-opacity-10">
+                    <small className="d-block text-muted">Air Pressure</small>
+                    <strong style={{ fontSize: '1.2rem' }}>{weatherData.pressure} hPa</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </motion.div>
-
-      {/* Prediction Result */}
-      {result && (
-        <motion.div ref={resultRef} className="text-center mt-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <div id="pdfContent" className="card bg-white border-0 shadow-sm rounded-4 p-4 mx-auto mb-3" style={{ maxWidth: '500px' }}>
-            <h4 className="text-primary">Prediction Report</h4>
-            <p><strong>District:</strong> {formData.District_Name}</p>
-            <p><strong>Crop:</strong> {formData.Crop}</p>
-            <p><strong>Season:</strong> {formData.Season_Encoded}</p>
-            <p><strong>Soil Quality:</strong> {formData.Soil_Quality_Encoded}</p>
-            <p><strong>Rainfall:</strong> {formData.Rainfall} mm</p>
-            <p><strong>Area:</strong> {formData.Area} Hectares</p>
-            <hr />
-            <h5 className="text-success fw-bold display-6">{result} Quintals</h5>
-          </div>
-          <button onClick={downloadPDF} className="btn btn-success shadow-sm fw-semibold">Download PDF</button>
-        </motion.div>
-      )}
     </div>
   );
 };
